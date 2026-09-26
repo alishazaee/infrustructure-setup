@@ -1,0 +1,47 @@
+---
+- name: Require Ubuntu for the Ubuntu repository configuration
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+    fail_msg: The Ubuntu archive template must not be installed on other distributions.
+
+- name: Create the APT authentication directory
+  ansible.builtin.file:
+    path: /etc/apt/auth.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Nexus credentials for APT
+  ansible.builtin.copy:
+    dest: /etc/apt/auth.conf.d/nexus.conf
+    content: |
+      machine {{ nexus_url }}
+      login {{ nexus_admin_username }}
+      password {{ nexus_admin_password }}
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Disable unmanaged legacy APT sources
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list
+    content: "# Ubuntu repositories are managed through Nexus by Ansible.\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure Nexus-backed Ubuntu repositories
+  ansible.builtin.template:
+    src: ubuntu.sources.j2
+    dest: /etc/apt/sources.list.d/ubuntu.sources
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Refresh package metadata through Nexus
+  ansible.builtin.apt:
+    update_cache: true

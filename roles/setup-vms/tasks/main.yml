@@ -1,0 +1,8 @@
+---
+- name: Install KVM, libvirt and Vagrant on the hypervisor
+  ansible.builtin.import_tasks: hypervisor.yml
+  tags:
+    - host
+
+- name: Provision the environment VMs on the prepared hypervisor
+  ansible.builtin.import_tasks: provision.yml

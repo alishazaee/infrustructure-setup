@@ -1,0 +1,69 @@
+---
+nexus_image: sonatype/nexus3:3.91.0
+nexus_container_name: nexus
+nexus_data_volume: nexus-data
+nexus_ui_port: 8081
+nexus_url: "http://{{ nexus_hostname }}:{{ nexus_ui_port }}"
+nexus_api_url: "{{ nexus_url }}/service/rest/v1"
+nexus_admin_username: admin
+nexus_docker_group_name: docker-public
+nexus_raw_group_name: raw-public
+nexus_blob_stores:
+  - name: docker-proxy
+    path: docker-proxy
+  - name: apt-proxy
+    path: apt-proxy
+  - name: raw-proxy
+    path: raw-proxy
+nexus_docker_group_port: 5000
+nexus_docker_proxy_repositories:
+  - name: docker-hub
+    remote_url: https://registry-1.docker.io
+    blob_store: docker-proxy
+    index_type: HUB
+    test_image: library/alpine:3.20
+  - name: kubernetes-registry
+    remote_url: https://registry.k8s.io
+    blob_store: docker-proxy
+    index_type: REGISTRY
+    test_image: pause:3.10
+  - name: ghcr
+    remote_url: https://ghcr.io
+    blob_store: docker-proxy
+    index_type: REGISTRY
+    test_image: flannel-io/flannel:v0.28.8
+nexus_docker_group_repository:
+  name: "{{ nexus_docker_group_name }}"
+  connector_port: "{{ nexus_docker_group_port }}"
+  blob_store: docker-proxy
+  members: "{{ nexus_docker_proxy_repositories | map(attribute='name') | list }}"
+nexus_raw_proxy_repositories:
+  - name: kubernetes-packages
+    remote_url: https://pkgs.k8s.io
+    blob_store: apt-proxy
+    strict_content_type_validation: false
+    test_path: core:/stable:/v1.35/deb/Release.key
+  - name: github-raw
+    remote_url: https://raw.githubusercontent.com
+    blob_store: raw-proxy
+    strict_content_type_validation: true
+    test_path: flannel-io/flannel/v0.28.8/Documentation/kube-flannel.yml
+nexus_raw_group_repository:
+  name: "{{ nexus_raw_group_name }}"
+  blob_store: raw-proxy
+  members: "{{ nexus_raw_proxy_repositories | map(attribute='name') | list }}"
+nexus_apt_proxy_repositories:
+  - name: ubuntu-archive
+    remote_url: http://archive.ubuntu.com/ubuntu/
+    blob_store: apt-proxy
+    distribution: ""
+    flat: false
+    test_path: dists/noble/InRelease
+  - name: ubuntu-security
+    remote_url: http://security.ubuntu.com/ubuntu/
+    blob_store: apt-proxy
+    distribution: ""
+    flat: false
+    test_path: dists/noble-security/InRelease
+nexus_startup_timeout: 600
+nexus_accept_eula: true

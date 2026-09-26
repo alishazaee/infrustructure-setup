@@ -1,0 +1,7 @@
+name: "{{ nexus_raw_group_repository.name }}"
+online: true
+storage:
+  blobStoreName: "{{ nexus_raw_group_repository.blob_store }}"
+  strictContentTypeValidation: true
+group:
+  memberNames: {{ nexus_raw_group_repository.members | to_json }}

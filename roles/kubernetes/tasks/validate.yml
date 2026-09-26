@@ -1,0 +1,11 @@
+---
+- name: Validate the Kubernetes cluster inventory
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - k8s_control_plane_hosts | length > 0
+      - k8s_bootstrap_host | length > 0
+      - k8s_bootstrap_host in k8s_control_plane_hosts
+      - k8s_control_plane_hosts | intersect(k8s_worker_hosts) | length == 0
+      - hostvars[k8s_bootstrap_host].ansible_host is defined
+    fail_msg: Define one bootstrap control plane and disjoint control-plane and worker node lists.

@@ -1,0 +1,27 @@
+---
+proxy_ssh_port: 22
+proxy_ssh_user: root
+proxy_expected_public_ip: "{{ proxy_ssh_host }}"
+
+proxy_config_directory: /etc/infrastructure-proxy
+proxy_password_file: "{{ proxy_config_directory }}/ssh-password"
+proxy_known_hosts_file: "{{ proxy_config_directory }}/known_hosts"
+proxy_service_name: proxy
+proxy_package_cache: "{{ state_directory }}/proxy-packages"
+proxy_remote_package_directory: /tmp/infrastructure-proxy-packages
+
+# Route public IPv4 TCP traffic and DNS through the SSH server. Private and
+# loopback ranges stay direct so Ansible, libvirt, and local services remain
+# reachable while the tunnel is active.
+proxy_routes:
+  - 0.0.0.0/0
+proxy_excluded_subnets:
+  - "{{ proxy_ssh_host }}/32"
+  - 127.0.0.0/8
+  - 10.0.0.0/8
+  - 169.254.0.0/16
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+
+proxy_verify_url: https://api.ipify.org
+proxy_verify_dns_host: registry-1.docker.io

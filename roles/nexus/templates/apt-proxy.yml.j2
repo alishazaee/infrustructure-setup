@@ -1,0 +1,19 @@
+# Nexus passes through upstream metadata and caches packages in the APT blob store.
+name: "{{ nexus_repository.name }}"
+online: true
+storage:
+  blobStoreName: "{{ nexus_repository.blob_store }}"
+  strictContentTypeValidation: true
+proxy:
+  remoteUrl: "{{ nexus_repository.remote_url }}"
+  contentMaxAge: 1440
+  metadataMaxAge: 60
+negativeCache:
+  enabled: true
+  timeToLive: 60
+httpClient:
+  blocked: false
+  autoBlock: true
+apt:
+  distribution: "{{ nexus_repository.distribution }}"
+  flat: {{ nexus_repository.flat | bool | lower }}

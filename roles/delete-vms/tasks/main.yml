@@ -1,0 +1,82 @@
+---
+- name: Validate the requested VM environment deletion
+  ansible.builtin.assert:
+    that:
+      - delete_vms_confirm | bool
+      - deployment_environment is defined
+      - delete_vm_hosts | length > 0
+      - delete_vm_hosts | reject('match', '^' ~ deployment_environment ~ '-vm[0-9]+$') | list | length == 0
+      - delete_vm_domain_names | length == delete_vm_hosts | length
+    fail_msg: >-
+      Refusing to delete VMs. Select one valid environment and pass
+      -e delete_vms_confirm=true explicitly.
+
+- name: Read all libvirt domains
+  community.libvirt.virt:
+    uri: "{{ libvirt_uri }}"
+    command: list_vms
+  register: delete_vms_domains_before
+  changed_when: false
+
+- name: Select existing domains from this environment
+  ansible.builtin.set_fact:
+    delete_vms_existing_domains: >-
+      {{ delete_vm_domain_names
+         | intersect(delete_vms_domains_before.list_vms | default([]))
+         | sort }}
+
+- name: Stop existing environment domains
+  community.libvirt.virt:
+    uri: "{{ libvirt_uri }}"
+    name: "{{ item }}"
+    state: destroyed
+  loop: "{{ delete_vms_existing_domains }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Undefine environment domains and delete their storage
+  community.libvirt.virt:
+    uri: "{{ libvirt_uri }}"
+    name: "{{ item }}"
+    command: undefine
+    flags:
+      - managed_save
+      - snapshots_metadata
+      - nvram
+      - checkpoints_metadata
+      - delete_volumes
+  loop: "{{ delete_vms_existing_domains }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Remove environment libvirt networks
+  community.libvirt.virt_net:
+    uri: "{{ libvirt_uri }}"
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ delete_vm_network_names }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Read libvirt domains after deletion
+  community.libvirt.virt:
+    uri: "{{ libvirt_uri }}"
+    command: list_vms
+  register: delete_vms_domains_after
+  changed_when: false
+
+- name: Verify that every selected domain is absent
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - delete_vm_domain_names | intersect(delete_vms_domains_after.list_vms | default([])) | length == 0
+
+- name: Remove generated environment access files
+  ansible.builtin.file:
+    path: "{{ project_directory }}/{{ item }}"
+    state: absent
+  loop:
+    - Vagrantfile
+    - kubeconfig
+    - ssh-config
+  when: delete_vms_remove_generated_access | bool

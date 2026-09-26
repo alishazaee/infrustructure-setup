@@ -1,0 +1,11 @@
+name: "{{ nexus_docker_group_repository.name }}"
+online: true
+storage:
+  blobStoreName: "{{ nexus_docker_group_repository.blob_store }}"
+  strictContentTypeValidation: true
+group:
+  memberNames: {{ nexus_docker_group_repository.members | to_json }}
+docker:
+  v1Enabled: false
+  forceBasicAuth: true
+  httpPort: {{ nexus_docker_group_repository.connector_port }}

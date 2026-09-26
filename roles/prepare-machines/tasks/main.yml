@@ -1,0 +1,71 @@
+---
+- name: Wait for the guest to accept connections
+  ansible.builtin.wait_for_connection:
+    timeout: 50
+
+- name: Gather guest facts
+  ansible.builtin.setup:
+
+- name: Require a Debian or Ubuntu guest
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+      - nexus_host_ip is defined
+    fail_msg: This role requires Debian guests and a Nexus address.
+
+- name: Configure resilient APT downloads
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/80-infrastructure-retries
+    content: |
+      Acquire::Retries "10";
+      Acquire::http::Timeout "30";
+      Acquire::https::Timeout "30";
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the machine administration tools
+  become: true
+  ansible.builtin.apt:
+    name: "{{ machine_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Read Docker configuration before updating connector access
+  ansible.builtin.import_tasks: docker_config.yml
+
+- name: Configure private Docker connector access for bootstrap
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: "{{ machine_existing_docker_config | combine(docker_daemon_config) | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    docker_daemon_config:
+      insecure-registries: >-
+        {{ nexus_docker_connector_ports
+           | map('regex_replace', '^', nexus_hostname ~ ':')
+           | list }}
+  notify: Restart Docker
+  no_log: true
+
+- name: Start and enable Docker
+  become: true
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Grant the login account Docker access
+  become: true
+  ansible.builtin.user:
+    name: "{{ ansible_facts.user_id }}"
+    groups:
+      - docker
+    append: true
+
+- name: Configure the guest root credentials and SSH access
+  ansible.builtin.import_tasks: configure.yml

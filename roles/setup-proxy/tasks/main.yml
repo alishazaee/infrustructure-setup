@@ -1,0 +1,185 @@
+---
+- name: Validate the proxy configuration
+  ansible.builtin.assert:
+    that:
+      - proxy_ssh_host | length > 0
+      - proxy_ssh_port | int > 0
+      - proxy_ssh_user | length > 0
+      - proxy_ssh_password | default('') | length > 0
+      - proxy_routes | length > 0
+    fail_msg: Configure the SSH proxy endpoint and encrypted proxy_ssh_password.
+  no_log: true
+
+- name: Wait for the machine before configuring its proxy
+  ansible.builtin.wait_for_connection:
+    timeout: 120
+  when: ansible_connection != 'local'
+
+- name: Read installed packages before configuring the proxy
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Install the transparent proxy packages on the controller
+  become: true
+  ansible.builtin.apt:
+    name:
+      - sshpass
+      - sshuttle
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - ansible_connection == 'local'
+    - "'sshpass' not in ansible_facts.packages or 'sshuttle' not in ansible_facts.packages"
+
+- name: Bootstrap transparent proxy packages on a guest
+  when:
+    - ansible_connection != 'local'
+    - "'sshpass' not in ansible_facts.packages or 'sshuttle' not in ansible_facts.packages"
+  vars:
+    proxy_cached_packages: "{{ lookup('ansible.builtin.fileglob', proxy_package_cache ~ '/*.deb', wantlist=true) | sort }}"
+  block:
+    - name: Bootstrap proxy packages from APT when no offline cache is supplied
+      become: true
+      ansible.builtin.apt:
+        name:
+          - sshpass
+          - sshuttle
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: proxy_cached_packages | length == 0
+
+    - name: Create the guest proxy package directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ proxy_remote_package_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy cached proxy packages to the guest
+      become: true
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ proxy_remote_package_directory }}/{{ item | basename }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ proxy_cached_packages }}"
+
+    - name: Install cached proxy packages on the guest
+      become: true
+      ansible.builtin.apt:
+        deb: "{{ proxy_remote_package_directory }}/{{ item | basename }}"
+        state: present
+      loop: "{{ proxy_cached_packages }}"
+
+- name: Create the proxy configuration directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ proxy_config_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Store the SSH proxy password
+  become: true
+  ansible.builtin.copy:
+    content: "{{ proxy_ssh_password }}\n"
+    dest: "{{ proxy_password_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart proxy
+
+- name: Check whether the SSH proxy host key is pinned
+  become: true
+  ansible.builtin.stat:
+    path: "{{ proxy_known_hosts_file }}"
+  register: proxy_known_hosts
+
+- name: Read the SSH proxy host key on first setup
+  ansible.builtin.command:
+    argv:
+      - ssh-keyscan
+      - -p
+      - "{{ proxy_ssh_port | string }}"
+      - -t
+      - ed25519
+      - -T
+      - "10"
+      - "{{ proxy_ssh_host }}"
+  register: proxy_host_key
+  changed_when: false
+  when: not proxy_known_hosts.stat.exists
+  no_log: true
+
+- name: Pin the SSH proxy host key
+  become: true
+  ansible.builtin.copy:
+    content: "{{ proxy_host_key.stdout }}\n"
+    dest: "{{ proxy_known_hosts_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart proxy
+  when: not proxy_known_hosts.stat.exists
+  no_log: true
+
+- name: Install the transparent proxy service
+  become: true
+  ansible.builtin.template:
+    src: proxy.service.j2
+    dest: "/etc/systemd/system/{{ proxy_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart proxy
+  no_log: true
+
+- name: Enable and start the transparent proxy
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ proxy_service_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply proxy configuration changes before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for DNS through the proxy
+  ansible.builtin.command:
+    argv:
+      - getent
+      - ahostsv4
+      - "{{ proxy_verify_dns_host }}"
+  register: proxy_dns_check
+  retries: 6
+  delay: 5
+  until: proxy_dns_check.rc == 0 and proxy_dns_check.stdout | length > 0
+  changed_when: false
+
+- name: Wait for traffic to leave through the proxy server
+  ansible.builtin.uri:
+    url: "{{ proxy_verify_url }}"
+    return_content: true
+    timeout: 20
+  register: proxy_egress_check
+  retries: 4
+  delay: 5
+  until: proxy_egress_check.content | default('') | trim == proxy_expected_public_ip
+  no_log: true
+
+- name: Verify the public egress address
+  ansible.builtin.assert:
+    that:
+      - proxy_egress_check.content | trim == proxy_expected_public_ip
+    fail_msg: >-
+      Traffic did not leave through {{ proxy_expected_public_ip }}; observed
+      {{ proxy_egress_check.content | default('no address') | trim }}.
+  no_log: true

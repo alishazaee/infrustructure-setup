@@ -1,0 +1,82 @@
+---
+- name: Check whether this control plane has joined
+  ansible.builtin.stat:
+    path: "{{ k8s_admin_kubeconfig }}"
+  register: k8s_control_plane_config
+
+- name: Join an unconfigured control plane
+  when: not k8s_control_plane_config.stat.exists
+  block:
+    - name: Generate a fresh control-plane certificate key
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - certs
+          - certificate-key
+      delegate_to: "{{ k8s_bootstrap_host }}"
+      register: k8s_certificate_key
+      changed_when: false
+      no_log: true
+
+    - name: Upload fresh control-plane certificates
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - init
+          - phase
+          - upload-certs
+          - --upload-certs
+          - --certificate-key
+          - "{{ k8s_certificate_key.stdout }}"
+          - --kubeconfig
+          - "{{ k8s_admin_kubeconfig }}"
+      delegate_to: "{{ k8s_bootstrap_host }}"
+      register: k8s_certificate_upload
+      changed_when: k8s_certificate_upload.rc == 0
+      no_log: true
+
+    - name: Generate a short-lived join command
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - token
+          - create
+          - --ttl
+          - 30m
+          - --print-join-command
+          - --kubeconfig
+          - "{{ k8s_admin_kubeconfig }}"
+      delegate_to: "{{ k8s_bootstrap_host }}"
+      register: k8s_control_plane_join_command
+      changed_when: true
+      no_log: true
+
+    - name: Join the additional control plane
+      ansible.builtin.command:
+        argv: >-
+          {{ k8s_control_plane_join_command.stdout.split()
+             + ['--control-plane',
+                '--certificate-key',
+                k8s_certificate_key.stdout,
+                '--cri-socket', k8s_cri_socket,
+                '--apiserver-advertise-address', ansible_host,
+                '--node-name', inventory_hostname] }}
+      args:
+        creates: "{{ k8s_admin_kubeconfig }}"
+      no_log: true
+
+- name: Verify the joined control plane API is serving
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ k8s_admin_kubeconfig }}"
+      - "--server=https://{{ ansible_host }}:{{ k8s_apiserver_port }}"
+      - --request-timeout=10s
+      - get
+      - --raw=/readyz
+  register: k8s_joined_api
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: k8s_joined_api.rc == 0 and k8s_joined_api.stdout == 'ok'

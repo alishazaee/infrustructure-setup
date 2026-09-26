@@ -1,0 +1,11 @@
+---
+- name: Delete one explicitly selected VM environment
+  hosts: hypervisors
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - role: delete-vms
+      vars:
+        delete_vm_hosts: "{{ groups['vms'] }}"
+      tags:
+        - delete

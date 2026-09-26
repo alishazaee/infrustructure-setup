@@ -1,0 +1,34 @@
+---
+setup_vm_hosts: []
+setup_vms_allow_reload: false
+host_packages:
+  - qemu-system-x86
+  - libvirt-daemon-system
+  - libvirt-clients
+  - libvirt-dev
+  - build-essential
+  - ruby-dev
+  - pkg-config
+  - libxml2-dev
+  - libxslt1-dev
+  - zlib1g-dev
+  - rsync
+  - python3-passlib
+  - python3-libvirt
+  - python3-lxml
+
+vagrant_version: "2.4.9"
+vagrant_libvirt_version: "0.12.2"
+libvirt_uri: qemu:///system
+
+# Guest hardware defaults; override per environment or per host.
+vm_box: bento/ubuntu-24.04
+vm_box_version: "202508.03.0"
+vm_cpus: 2
+vm_memory_mb: 2048
+
+# Applied to every vagrant command so state stays inside the project.
+vagrant_environment:
+  VAGRANT_HOME: "{{ vagrant_home }}"
+  VAGRANT_DEFAULT_PROVIDER: libvirt
+  VAGRANT_CHECKPOINT_DISABLE: "1"

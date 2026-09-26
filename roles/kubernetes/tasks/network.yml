@@ -1,0 +1,40 @@
+---
+- name: Download the pinned Flannel manifest through Nexus
+  ansible.builtin.get_url:
+    url: "{{ k8s_nexus_flannel_manifest_url }}"
+    url_username: "{{ k8s_registry_username }}"
+    url_password: "{{ k8s_registry_password }}"
+    force_basic_auth: true
+    dest: /etc/kubernetes/kube-flannel.upstream.yml
+    owner: root
+    group: root
+    mode: "0644"
+  no_log: true
+
+- name: Read the cached upstream Flannel manifest
+  ansible.builtin.slurp:
+    src: /etc/kubernetes/kube-flannel.upstream.yml
+  register: k8s_flannel_source
+
+- name: Render the Nexus-backed Flannel manifest
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/kube-flannel.yml
+    content: >-
+      {{ k8s_flannel_source.content | b64decode
+         | regex_replace('"Network": "[^"]+"', '"Network": "' ~ k8s_pod_cidr ~ '"')
+         | replace('ghcr.io/', k8s_nexus_ghcr_registry ~ '/') }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Flannel pod networking
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ k8s_admin_kubeconfig }}"
+      - apply
+      - --filename
+      - /etc/kubernetes/kube-flannel.yml
+  register: k8s_flannel_apply
+  changed_when: "'created' in k8s_flannel_apply.stdout or 'configured' in k8s_flannel_apply.stdout"

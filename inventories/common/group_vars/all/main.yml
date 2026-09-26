@@ -1,0 +1,21 @@
+---
+project_prefix: infrastructure
+state_directory: "{{ playbook_dir }}/../.state"
+project_directory: "{{ state_directory }}/{{ deployment_environment }}"
+vagrant_home: "{{ state_directory }}/vagrant-home"
+
+nexus_hostname: nexus
+nexus_ui_port: 8081
+nexus_docker_group_port: 5000
+nexus_docker_group_name: docker-public
+nexus_raw_group_name: raw-public
+
+# These environments intentionally grant the operator administrative access.
+# Reusable role defaults use the read-only view role instead.
+k8s_user_cluster_role: cluster-admin
+
+# These connector ports are shared contracts between the Nexus, machine
+# preparation, and Kubernetes roles. Repository definitions remain owned by
+# the Nexus role.
+nexus_docker_connector_ports:
+  - "{{ nexus_docker_group_port }}"

@@ -1,0 +1,18 @@
+{% set containerd_v2 = k8s_containerd_version.stdout.split()[-2].lstrip('v').split('.')[0] | int >= 2 %}
+version = {{ 3 if containerd_v2 else 2 }}
+
+{% if containerd_v2 %}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+  SystemdCgroup = true
+[plugins.'io.containerd.cri.v1.images'.registry]
+  config_path = "/etc/containerd/certs.d"
+{% else %}
+[plugins.'io.containerd.grpc.v1.cri'.containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+[plugins.'io.containerd.grpc.v1.cri'.containerd.runtimes.runc.options]
+  SystemdCgroup = true
+[plugins.'io.containerd.grpc.v1.cri'.registry]
+  config_path = "/etc/containerd/certs.d"
+{% endif %}

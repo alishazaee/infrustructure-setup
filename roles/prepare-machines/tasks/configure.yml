@@ -1,0 +1,27 @@
+---
+- name: Configure the guest root credentials and SSH access
+  become: true
+  vars:
+    root_password_salt: "{{ (inventory_hostname | hash('sha256'))[:16] }}"
+  block:
+    - name: Set the root password from Ansible Vault
+      ansible.builtin.user:
+        name: root
+        password: "{{ vm_root_password | password_hash('sha512', root_password_salt) }}"
+        password_lock: false
+      no_log: true
+
+    - name: Permit root password logins over SSH
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/00-root-login.conf
+        content: |
+          PermitRootLogin yes
+          PasswordAuthentication yes
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload SSH
+
+    - name: Validate the SSH server configuration
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false

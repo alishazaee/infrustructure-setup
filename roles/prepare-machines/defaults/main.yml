@@ -1,0 +1,19 @@
+---
+machine_packages:
+  - tmux
+  - htop
+  - sysstat
+  - iotop
+  - nmon
+  - bmon
+  - docker.io
+  - python3-docker
+
+nexus_hostname: nexus
+nexus_docker_group_port: 5000
+nexus_registry_url: "http://{{ nexus_hostname }}:{{ nexus_docker_group_port }}"
+nexus_ui_port: 8081
+nexus_admin_username: admin
+nexus_url: "http://{{ nexus_hostname }}:{{ nexus_ui_port }}"
+nexus_docker_connector_ports:
+  - "{{ nexus_docker_group_port }}"

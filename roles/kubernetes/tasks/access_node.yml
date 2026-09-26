@@ -1,0 +1,35 @@
+---
+- name: Create the operator kubeconfig directory
+  ansible.builtin.file:
+    path: "{{ k8s_user_home }}/.kube"
+    state: directory
+    owner: "{{ k8s_user }}"
+    group: "{{ k8s_user }}"
+    mode: "0700"
+
+- name: Read the dedicated operator kubeconfig from the bootstrap node
+  ansible.builtin.slurp:
+    src: "{{ k8s_user_kubeconfig }}"
+  delegate_to: "{{ k8s_bootstrap_host }}"
+  register: k8s_operator_config_source
+  no_log: true
+
+- name: Install kubectl access for the Kubernetes operator
+  ansible.builtin.copy:
+    content: "{{ k8s_operator_config_source.content | b64decode }}"
+    dest: "{{ k8s_user_home }}/.kube/config"
+    owner: "{{ k8s_user }}"
+    group: "{{ k8s_user }}"
+    mode: "0600"
+  no_log: true
+
+- name: Save the operator kubeconfig on the Ansible controller
+  when: k8s_export_kubeconfig | bool
+  ansible.builtin.copy:
+    content: "{{ k8s_operator_config_source.content | b64decode }}"
+    dest: "{{ k8s_export_kubeconfig_path }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true

@@ -1,0 +1,32 @@
+---
+- name: Read Docker configuration before updating the mirror
+  ansible.builtin.import_tasks: docker_config.yml
+
+- name: Configure Docker to use the Nexus registry mirror
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: "{{ machine_existing_docker_config | combine(docker_daemon_config) | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    docker_daemon_config:
+      registry-mirrors:
+        - "{{ nexus_registry_url }}"
+      insecure-registries: >-
+        {{ nexus_docker_connector_ports
+           | map('regex_replace', '^', nexus_hostname ~ ':')
+           | list }}
+  notify: Restart Docker
+  no_log: true
+
+- name: Apply the Docker Nexus client configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Authenticate Docker clients to Nexus connectors
+  community.docker.docker_login:
+    registry_url: "{{ nexus_hostname }}:{{ item }}"
+    username: "{{ nexus_admin_username }}"
+    password: "{{ nexus_admin_password }}"
+  loop: "{{ nexus_docker_connector_ports }}"
+  no_log: true

@@ -1,0 +1,13 @@
+[Unit]
+Description=Transparent SSH proxy for infrastructure traffic
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sshuttle --method auto --dns --remote {{ proxy_ssh_user }}@{{ proxy_ssh_host }}:{{ proxy_ssh_port }} --ssh-cmd "/usr/bin/sshpass -f {{ proxy_password_file }} /usr/bin/ssh -F /dev/null -o UserKnownHostsFile={{ proxy_known_hosts_file }} -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"{% for route in proxy_routes %} {{ route }}{% endfor %}{% for subnet in proxy_excluded_subnets %} --exclude {{ subnet }}{% endfor %}{{ '' }}
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

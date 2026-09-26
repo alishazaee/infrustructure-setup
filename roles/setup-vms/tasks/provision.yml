@@ -1,0 +1,91 @@
+---
+- name: Provision the environment VMs with Vagrant
+  environment: "{{ vagrant_environment }}"
+  vars:
+    vm_names: "{{ setup_vm_hosts | sort }}"
+  block:
+    - name: Validate the selected environment and VM inventory
+      ansible.builtin.assert:
+        that:
+          - deployment_environment is defined
+          - vm_names | length > 0
+          - vm_names | map('extract', hostvars, 'ansible_host') | unique | length == vm_names | length
+          - vm_names | reject('match', '^' ~ deployment_environment ~ '-vm[0-9]+$') | list | length == 0
+          - vagrant_management_network != management_network
+        fail_msg: Load one environment with uniquely named and addressed VMs.
+      tags:
+        - render
+
+    - name: Create the environment state directory
+      ansible.builtin.file:
+        path: "{{ project_directory }}"
+        state: directory
+        mode: "0700"
+      tags:
+        - render
+
+    - name: Render the environment Vagrantfile
+      ansible.builtin.template:
+        src: Vagrantfile.j2
+        dest: "{{ project_directory }}/Vagrantfile"
+        mode: "0600"
+      register: rendered_vagrantfile
+      tags:
+        - render
+
+    - name: Validate the Vagrant configuration
+      ansible.builtin.command: vagrant validate
+      args:
+        chdir: "{{ project_directory }}"
+      changed_when: false
+
+    - name: Read the current VM states
+      ansible.builtin.command: vagrant status --machine-readable
+      args:
+        chdir: "{{ project_directory }}"
+      register: vagrant_status
+      changed_when: false
+
+    - name: Create or start the environment VMs
+      ansible.builtin.command:
+        argv: "{{ ['vagrant', 'up', '--provider=libvirt', '--no-parallel'] + vm_names }}"
+      args:
+        chdir: "{{ project_directory }}"
+      register: vagrant_up
+      changed_when: >-
+        vagrant_status.stdout_lines | select('search', ',state,running$') | list | length
+        != vm_names | length
+
+    - name: Apply an updated VM definition
+      ansible.builtin.command: "vagrant reload {{ item }} --no-provision"
+      args:
+        chdir: "{{ project_directory }}"
+      loop: "{{ vm_names }}"
+      when:
+        - setup_vms_allow_reload | bool
+        - rendered_vagrantfile.changed
+        - vagrant_status.stdout_lines | select('search', ',state,running$') | list | length == vm_names | length
+      changed_when: true
+
+    - name: Verify each VM is running in libvirt
+      community.libvirt.virt:
+        uri: "{{ libvirt_uri }}"
+        name: "{{ project_prefix }}-{{ item }}"
+        command: status
+      loop: "{{ vm_names }}"
+      register: vm_state
+      changed_when: false
+      failed_when: vm_state.status != 'running'
+
+    - name: Read the Vagrant SSH configuration
+      ansible.builtin.command: vagrant ssh-config
+      args:
+        chdir: "{{ project_directory }}"
+      register: vagrant_ssh_config
+      changed_when: false
+
+    - name: Save the environment SSH configuration
+      ansible.builtin.copy:
+        content: "{{ vagrant_ssh_config.stdout }}\n"
+        dest: "{{ project_directory }}/ssh-config"
+        mode: "0600"

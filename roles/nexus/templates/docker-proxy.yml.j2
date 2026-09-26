@@ -1,0 +1,24 @@
+# Ansible renders this configuration and submits it to the Nexus REST API.
+name: "{{ nexus_repository.name }}"
+online: true
+storage:
+  blobStoreName: "{{ nexus_repository.blob_store }}"
+  strictContentTypeValidation: true
+proxy:
+  remoteUrl: "{{ nexus_repository.remote_url }}"
+  contentMaxAge: 1440
+  metadataMaxAge: 1440
+negativeCache:
+  enabled: true
+  timeToLive: 1440
+httpClient:
+  blocked: false
+  autoBlock: true
+docker:
+  v1Enabled: false
+  forceBasicAuth: true
+  httpPort: null
+dockerProxy:
+  indexType: "{{ nexus_repository.index_type }}"
+  cacheForeignLayers: true
+  foreignLayerUrlWhitelist: []

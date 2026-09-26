@@ -1,0 +1,49 @@
+---
+k8s_version: "1.35.8"
+k8s_minor_version: "{{ k8s_version.split('.')[:2] | join('.') }}"
+k8s_package_version: "{{ k8s_version }}-1.1"
+k8s_control_plane_hosts: []
+k8s_worker_hosts: []
+k8s_bootstrap_host: ""
+k8s_apiserver_port: 6443
+k8s_control_plane_endpoint: "{{ hostvars[k8s_bootstrap_host].ansible_host }}:{{ k8s_apiserver_port }}"
+k8s_pod_cidr: 10.244.0.0/16
+k8s_service_cidr: 10.96.0.0/12
+k8s_flannel_version: v0.28.8
+k8s_cri_socket: unix:///run/containerd/containerd.sock
+
+k8s_nexus_registry: "{{ nexus_hostname }}:{{ nexus_docker_group_port }}"
+k8s_nexus_docker_hub_registry: "{{ k8s_nexus_registry }}"
+k8s_nexus_kubernetes_registry: "{{ k8s_nexus_registry }}"
+k8s_nexus_ghcr_registry: "{{ k8s_nexus_registry }}"
+k8s_registry_username: admin
+k8s_registry_password: "{{ nexus_admin_password }}"
+nexus_raw_group_name: raw-public
+k8s_nexus_kubernetes_packages_url: >-
+  http://{{ nexus_hostname }}:{{ nexus_ui_port }}/repository/{{ nexus_raw_group_name }}/core:/stable:/v{{ k8s_minor_version }}/deb
+k8s_nexus_flannel_manifest_url: >-
+  http://{{ nexus_hostname }}:{{ nexus_ui_port }}/repository/{{ nexus_raw_group_name }}/flannel-io/flannel/{{ k8s_flannel_version }}/Documentation/kube-flannel.yml
+k8s_registry_mirrors:
+  - namespace: docker.io
+    server: https://registry-1.docker.io
+    nexus_registry: "{{ k8s_nexus_docker_hub_registry }}"
+  - namespace: registry.k8s.io
+    server: https://registry.k8s.io
+    nexus_registry: "{{ k8s_nexus_kubernetes_registry }}"
+  - namespace: ghcr.io
+    server: https://ghcr.io
+    nexus_registry: "{{ k8s_nexus_ghcr_registry }}"
+  - namespace: "{{ k8s_nexus_docker_hub_registry }}"
+    server: "http://{{ k8s_nexus_docker_hub_registry }}"
+    nexus_registry: "{{ k8s_nexus_docker_hub_registry }}"
+
+k8s_admin_kubeconfig: /etc/kubernetes/admin.conf
+k8s_user: kubernetes
+k8s_user_group: kubernetes-admins
+k8s_user_cluster_role: view
+k8s_user_kubeconfig: /etc/kubernetes/kubernetes-user.conf
+k8s_user_home: "/home/{{ k8s_user }}"
+k8s_export_kubeconfig: true
+k8s_export_kubeconfig_path: "{{ project_directory }}/kubeconfig"
+k8s_check_image: "{{ k8s_nexus_docker_hub_registry }}/library/busybox:1.37"
+k8s_check_timeout: 600

@@ -1,0 +1,316 @@
+---
+- name: Read the EULA state
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/system/eula"
+    return_content: true
+    status_code: 200
+  register: nexus_eula
+  changed_when: false
+
+- name: Accept the EULA
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/system/eula"
+    method: POST
+    body_format: json
+    body:
+      accepted: true
+      disclaimer: "{{ nexus_eula.json.disclaimer }}"
+    status_code: [200, 204]
+  when: nexus_accept_eula | bool and not nexus_eula.json.accepted
+
+- name: Read active security realms
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/security/realms/active"
+    return_content: true
+    status_code: 200
+  register: nexus_realms
+  changed_when: false
+
+- name: Enable Docker authentication
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/security/realms/active"
+    method: PUT
+    body_format: json
+    body: "{{ nexus_realms.json + ['DockerToken'] }}"
+    status_code: 204
+  when: "'DockerToken' not in nexus_realms.json"
+
+- name: Read dedicated file blob stores
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/blobstores/file/{{ nexus_blob_store.name }}"
+    return_content: true
+    status_code: [200, 404]
+  loop: "{{ nexus_blob_stores }}"
+  loop_control:
+    loop_var: nexus_blob_store
+    label: "{{ nexus_blob_store.name }}"
+  register: nexus_blob_store_status
+  changed_when: false
+
+- name: Create missing file blob stores
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/blobstores/file"
+    method: POST
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'blob-store.yml.j2') | from_yaml }}"
+    status_code: [201, 204]
+  vars:
+    nexus_blob_store: "{{ nexus_blob_store_result.nexus_blob_store }}"
+  loop: "{{ nexus_blob_store_status.results }}"
+  loop_control:
+    loop_var: nexus_blob_store_result
+    label: "{{ nexus_blob_store_result.nexus_blob_store.name }}"
+  when: nexus_blob_store_result.status == 404
+
+- name: Read Docker proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/docker/proxy/{{ nexus_repository.name }}"
+    return_content: true
+    status_code: [200, 404]
+  loop: "{{ nexus_docker_proxy_repositories }}"
+  loop_control:
+    loop_var: nexus_repository
+    label: "{{ nexus_repository.name }}"
+  register: nexus_docker_repository_status
+  changed_when: false
+
+- name: Preserve Docker repository data when its blob store differs
+  ansible.builtin.fail:
+    msg: "Repository {{ nexus_repository_result.nexus_repository.name }} needs an explicit blob-store migration."
+  loop: "{{ nexus_docker_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when:
+    - nexus_repository_result.status == 200
+    - nexus_repository_result.json.storage.blobStoreName != nexus_repository_result.nexus_repository.blob_store
+
+- name: Create missing Docker proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/docker/proxy"
+    method: POST
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'docker-proxy.yml.j2') | from_yaml }}"
+    status_code: 201
+  vars:
+    nexus_repository: "{{ nexus_repository_result.nexus_repository }}"
+  loop: "{{ nexus_docker_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when: nexus_repository_result.status == 404
+
+- name: Reconcile changed Docker proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/docker/proxy/{{ nexus_repository.name }}"
+    method: PUT
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'docker-proxy.yml.j2') | from_yaml }}"
+    status_code: 204
+  vars:
+    nexus_repository: "{{ nexus_repository_result.nexus_repository }}"
+  loop: "{{ nexus_docker_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when:
+    - nexus_repository_result.status == 200
+    - nexus_repository_result.json.storage.blobStoreName == nexus_repository.blob_store
+    - >-
+      nexus_repository_result.json.proxy.remoteUrl != nexus_repository.remote_url
+      or nexus_repository_result.json.docker.httpPort is not none
+      or not nexus_repository_result.json.docker.forceBasicAuth | bool
+      or nexus_repository_result.json.dockerProxy.indexType != nexus_repository.index_type
+
+- name: Read the Docker group repository
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/docker/group/{{ nexus_docker_group_repository.name }}"
+    return_content: true
+    status_code: [200, 404]
+  register: nexus_docker_group_status
+  changed_when: false
+
+- name: Preserve Docker group data when its blob store differs
+  ansible.builtin.fail:
+    msg: "Repository {{ nexus_docker_group_repository.name }} needs an explicit blob-store migration."
+  when:
+    - nexus_docker_group_status.status == 200
+    - nexus_docker_group_status.json.storage.blobStoreName != nexus_docker_group_repository.blob_store
+
+- name: Create the Docker group repository
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/docker/group"
+    method: POST
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'docker-group.yml.j2') | from_yaml }}"
+    status_code: 201
+  when: nexus_docker_group_status.status == 404
+
+- name: Reconcile the Docker group repository
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/docker/group/{{ nexus_docker_group_repository.name }}"
+    method: PUT
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'docker-group.yml.j2') | from_yaml }}"
+    status_code: 204
+  when:
+    - nexus_docker_group_status.status == 200
+    - nexus_docker_group_status.json.storage.blobStoreName == nexus_docker_group_repository.blob_store
+    - >-
+      nexus_docker_group_status.json.group.memberNames != nexus_docker_group_repository.members
+      or nexus_docker_group_status.json.docker.httpPort | int != nexus_docker_group_repository.connector_port | int
+      or not nexus_docker_group_status.json.docker.forceBasicAuth | bool
+
+- name: Read Raw proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/raw/proxy/{{ nexus_repository.name }}"
+    return_content: true
+    status_code: [200, 404]
+  loop: "{{ nexus_raw_proxy_repositories }}"
+  loop_control:
+    loop_var: nexus_repository
+    label: "{{ nexus_repository.name }}"
+  register: nexus_raw_repository_status
+  changed_when: false
+
+- name: Preserve Raw repository data when its blob store differs
+  ansible.builtin.fail:
+    msg: "Repository {{ nexus_repository_result.nexus_repository.name }} needs an explicit blob-store migration."
+  loop: "{{ nexus_raw_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when:
+    - nexus_repository_result.status == 200
+    - nexus_repository_result.json.storage.blobStoreName != nexus_repository_result.nexus_repository.blob_store
+
+- name: Create missing Raw proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/raw/proxy"
+    method: POST
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'raw-proxy.yml.j2') | from_yaml }}"
+    status_code: 201
+  vars:
+    nexus_repository: "{{ nexus_repository_result.nexus_repository }}"
+  loop: "{{ nexus_raw_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when: nexus_repository_result.status == 404
+
+- name: Reconcile changed Raw proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/raw/proxy/{{ nexus_repository.name }}"
+    method: PUT
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'raw-proxy.yml.j2') | from_yaml }}"
+    status_code: 204
+  vars:
+    nexus_repository: "{{ nexus_repository_result.nexus_repository }}"
+  loop: "{{ nexus_raw_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when:
+    - nexus_repository_result.status == 200
+    - nexus_repository_result.json.storage.blobStoreName == nexus_repository.blob_store
+    - >-
+      nexus_repository_result.json.proxy.remoteUrl != nexus_repository.remote_url
+      or nexus_repository_result.json.storage.strictContentTypeValidation | bool
+         != nexus_repository.strict_content_type_validation | bool
+
+- name: Read the Raw group repository
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/raw/group/{{ nexus_raw_group_repository.name }}"
+    return_content: true
+    status_code: [200, 404]
+  register: nexus_raw_group_status
+  changed_when: false
+
+- name: Preserve Raw group data when its blob store differs
+  ansible.builtin.fail:
+    msg: "Repository {{ nexus_raw_group_repository.name }} needs an explicit blob-store migration."
+  when:
+    - nexus_raw_group_status.status == 200
+    - nexus_raw_group_status.json.storage.blobStoreName != nexus_raw_group_repository.blob_store
+
+- name: Create the Raw group repository
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/raw/group"
+    method: POST
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'raw-group.yml.j2') | from_yaml }}"
+    status_code: 201
+  when: nexus_raw_group_status.status == 404
+
+- name: Reconcile the Raw group repository
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/raw/group/{{ nexus_raw_group_repository.name }}"
+    method: PUT
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'raw-group.yml.j2') | from_yaml }}"
+    status_code: 204
+  when:
+    - nexus_raw_group_status.status == 200
+    - nexus_raw_group_status.json.storage.blobStoreName == nexus_raw_group_repository.blob_store
+    - nexus_raw_group_status.json.group.memberNames != nexus_raw_group_repository.members
+
+- name: Read APT proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/apt/proxy/{{ nexus_repository.name }}"
+    return_content: true
+    status_code: [200, 404]
+  loop: "{{ nexus_apt_proxy_repositories }}"
+  loop_control:
+    loop_var: nexus_repository
+    label: "{{ nexus_repository.name }}"
+  register: nexus_apt_repository_status
+  changed_when: false
+
+- name: Preserve APT repository data when its blob store differs
+  ansible.builtin.fail:
+    msg: "Repository {{ nexus_repository_result.nexus_repository.name }} needs an explicit blob-store migration."
+  loop: "{{ nexus_apt_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when:
+    - nexus_repository_result.status == 200
+    - nexus_repository_result.json.storage.blobStoreName != nexus_repository_result.nexus_repository.blob_store
+
+- name: Create missing APT proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/apt/proxy"
+    method: POST
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'apt-proxy.yml.j2') | from_yaml }}"
+    status_code: 201
+  vars:
+    nexus_repository: "{{ nexus_repository_result.nexus_repository }}"
+  loop: "{{ nexus_apt_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when: nexus_repository_result.status == 404
+
+- name: Reconcile changed APT proxy repositories
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/repositories/apt/proxy/{{ nexus_repository.name }}"
+    method: PUT
+    body_format: json
+    body: "{{ lookup('ansible.builtin.template', 'apt-proxy.yml.j2') | from_yaml }}"
+    status_code: 204
+  vars:
+    nexus_repository: "{{ nexus_repository_result.nexus_repository }}"
+  loop: "{{ nexus_apt_repository_status.results }}"
+  loop_control:
+    loop_var: nexus_repository_result
+    label: "{{ nexus_repository_result.nexus_repository.name }}"
+  when:
+    - nexus_repository_result.status == 200
+    - nexus_repository_result.json.storage.blobStoreName == nexus_repository.blob_store
+    - >-
+      nexus_repository_result.json.proxy.remoteUrl != nexus_repository.remote_url
+      or nexus_repository_result.json.apt.distribution != nexus_repository.distribution
+      or nexus_repository_result.json.apt.flat | bool != nexus_repository.flat | bool

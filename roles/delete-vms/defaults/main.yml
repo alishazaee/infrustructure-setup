@@ -1,0 +1,12 @@
+---
+delete_vm_hosts: []
+delete_vm_domain_names: >-
+  {{ delete_vm_hosts
+     | map('regex_replace', '^', project_prefix ~ '-')
+     | list }}
+delete_vm_network_names:
+  - "{{ project_prefix }}-{{ deployment_environment }}-vagrant"
+  - "{{ project_prefix }}-{{ deployment_environment }}-mgmt"
+delete_vms_confirm: false
+delete_vms_remove_generated_access: true
+libvirt_uri: qemu:///system

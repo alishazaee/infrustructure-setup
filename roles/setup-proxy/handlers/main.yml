@@ -1,0 +1,7 @@
+---
+- name: Restart proxy
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ proxy_service_name }}"
+    state: restarted
+    daemon_reload: true

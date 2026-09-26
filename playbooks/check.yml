@@ -1,0 +1,17 @@
+---
+- name: Check the Kubernetes installation
+  hosts: k8s_bootstrap_control_plane
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Run the Kubernetes health checks
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: check
+      vars:
+        k8s_control_plane_hosts: "{{ groups['k8s_control_plane'] }}"
+        k8s_worker_hosts: "{{ groups['k8s_workers'] }}"
+        k8s_bootstrap_host: "{{ groups['k8s_bootstrap_control_plane'] | first }}"
+      tags:
+        - kubernetes
+        - kubernetes_verification

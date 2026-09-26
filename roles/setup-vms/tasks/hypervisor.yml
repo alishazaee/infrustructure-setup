@@ -1,0 +1,85 @@
+---
+- name: Install the hypervisor toolchain
+  environment: "{{ vagrant_environment }}"
+  block:
+    - name: Gather hypervisor facts
+      ansible.builtin.setup:
+        gather_subset: [min]
+
+    - name: Create the Vagrant home directory
+      ansible.builtin.file:
+        path: "{{ vagrant_home }}"
+        state: directory
+        mode: "0700"
+
+    - name: Install host dependencies
+      become: true
+      ansible.builtin.apt:
+        name: "{{ host_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Read installed package versions
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Install the pinned upstream Vagrant release
+      when: >-
+        ansible_facts.packages['vagrant'] is not defined
+        or ansible_facts.packages['vagrant'][0].version != vagrant_version ~ '-1'
+      vars:
+        vagrant_release_url: https://releases.hashicorp.com/vagrant/{{ vagrant_version }}
+        vagrant_package: "{{ vagrant_home }}/vagrant_{{ vagrant_version }}_amd64.deb"
+      block:
+        - name: Download and checksum the official Vagrant package
+          ansible.builtin.get_url:
+            url: "{{ vagrant_release_url }}/vagrant_{{ vagrant_version }}-1_amd64.deb"
+            checksum: sha256:{{ vagrant_release_url }}/vagrant_{{ vagrant_version }}_SHA256SUMS
+            dest: "{{ vagrant_package }}"
+            mode: "0644"
+            timeout: 120
+
+        - name: Install the Vagrant package
+          become: true
+          ansible.builtin.apt:
+            deb: "{{ vagrant_package }}"
+
+    - name: Start and enable libvirt
+      become: true
+      ansible.builtin.service:
+        name: libvirtd
+        state: started
+        enabled: true
+
+    - name: Grant the invoking account kvm and libvirt access
+      become: true
+      ansible.builtin.user:
+        name: "{{ ansible_facts.user_id }}"
+        groups:
+          - kvm
+          - libvirt
+        append: true
+
+    - name: Check that the invoking account can reach libvirt
+      community.libvirt.virt:
+        uri: "{{ libvirt_uri }}"
+        command: list_vms
+      changed_when: false
+
+    - name: List installed Vagrant plugins
+      ansible.builtin.command: vagrant plugin list
+      register: vagrant_plugins
+      changed_when: false
+
+    - name: Install the pinned vagrant-libvirt provider
+      ansible.builtin.command:
+        argv:
+          - vagrant
+          - plugin
+          - install
+          - vagrant-libvirt
+          - --plugin-version
+          - "{{ vagrant_libvirt_version }}"
+      when: "'vagrant-libvirt (' ~ vagrant_libvirt_version ~ ',' not in vagrant_plugins.stdout"
+      changed_when: true

@@ -1,0 +1,234 @@
+---
+- name: Set up the VMs on the hypervisor
+  hosts: hypervisors
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - role: setup-proxy
+      tags:
+        - proxy
+    - role: setup-vms
+      vars:
+        setup_vm_hosts: "{{ groups['vms'] }}"
+
+- name: Resolve inventory machines on the hypervisors and VMs
+  hosts: hypervisors:vms
+  gather_facts: false
+  vars:
+    # Fresh Vagrant guests do not yet have the configured root password.
+    ansible_user: vagrant
+    ansible_password: ""
+    ansible_ssh_private_key_file: "{{ project_directory }}/.vagrant/machines/{{ inventory_hostname }}/libvirt/private_key"
+  tags:
+    - hosts
+  tasks:
+    - name: Map every inventory machine to its fixed address
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: "^[^#]+\\s+{{ item | regex_escape }}(?:\\s|$)"
+        line: "{{ hostvars[item].ansible_host }} {{ item }}{% if item in groups['nexus_machine'] %} {{ nexus_hostname }}{% endif %}"
+        state: present
+      loop: "{{ groups['vms'] | sort }}"
+
+- name: Prepare the provisioned machines
+  hosts: vms
+  gather_facts: false
+  become: true
+  vars:
+    ansible_user: vagrant
+    ansible_password: ""
+    ansible_ssh_private_key_file: "{{ project_directory }}/.vagrant/machines/{{ inventory_hostname }}/libvirt/private_key"
+  roles:
+    - role: setup-proxy
+      tags:
+        - proxy
+    - prepare-machines
+
+- name: Deploy and configure Nexus proxies
+  hosts: nexus_machine
+  gather_facts: false
+  roles:
+    - role: nexus
+      tags:
+        - nexus
+
+- name: Configure Docker clients for Nexus
+  hosts: vms:!nexus_machine
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Enable the Nexus Docker Hub mirror
+      ansible.builtin.import_role:
+        name: prepare-machines
+        tasks_from: nexus_client
+      tags:
+        - nexus
+
+- name: Configure package clients for Nexus
+  hosts: vms
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Gather facts for Ubuntu repository selection
+      ansible.builtin.setup:
+        gather_subset: [min]
+      tags:
+        - nexus
+    - name: Route Ubuntu package downloads through Nexus
+      ansible.builtin.import_role:
+        name: prepare-machines
+        tasks_from: nexus_apt
+      tags:
+        - nexus
+
+- name: Validate the Kubernetes topology
+  hosts: k8s_bootstrap_control_plane
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Validate the selected Kubernetes topology
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: validate
+      vars:
+        k8s_control_plane_hosts: "{{ groups['k8s_control_plane'] }}"
+        k8s_worker_hosts: "{{ groups['k8s_workers'] }}"
+        k8s_bootstrap_host: "{{ groups['k8s_bootstrap_control_plane'] | first }}"
+      tags:
+        - kubernetes
+        - kubernetes_validation
+
+- name: Prepare every Kubernetes node
+  hosts: k8s_control_plane:k8s_workers
+  serial: 1
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Configure shared Kubernetes prerequisites
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: node
+      tags:
+        - kubernetes
+        - kubernetes_node_preparation
+
+- name: Bootstrap the first Kubernetes control plane
+  hosts: k8s_bootstrap_control_plane
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Initialize the Kubernetes cluster
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: bootstrap_control_plane
+      vars:
+        k8s_control_plane_hosts: "{{ groups['k8s_control_plane'] }}"
+        k8s_bootstrap_host: "{{ groups['k8s_bootstrap_control_plane'] | first }}"
+      tags:
+        - kubernetes
+        - kubernetes_control_plane
+        - kubernetes_control_plane_bootstrap
+
+- name: Join the remaining Kubernetes control planes
+  hosts: k8s_additional_control_planes
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - name: Join this Kubernetes control plane
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: join_control_plane
+      vars:
+        k8s_bootstrap_host: "{{ groups['k8s_bootstrap_control_plane'] | first }}"
+      tags:
+        - kubernetes
+        - kubernetes_control_plane
+        - kubernetes_control_plane_join
+
+- name: Install Kubernetes pod networking
+  hosts: k8s_bootstrap_control_plane
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Configure the cluster network
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: network
+      tags:
+        - kubernetes
+        - kubernetes_network_plugin
+
+- name: Join the Kubernetes workers
+  hosts: k8s_workers
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Configure this Kubernetes worker
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: worker
+      vars:
+        k8s_bootstrap_host: "{{ groups['k8s_bootstrap_control_plane'] | first }}"
+      tags:
+        - kubernetes
+        - kubernetes_worker_join
+
+- name: Create dedicated kubectl credentials
+  hosts: k8s_bootstrap_control_plane
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Create operator RBAC and client credentials
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: access_control
+      tags:
+        - kubernetes
+        - kubernetes_access
+        - kubernetes_access_control
+
+- name: Install kubectl credentials on every cluster machine
+  hosts: k8s_control_plane:k8s_workers
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Configure kubectl for the Kubernetes operator
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: access_node
+      vars:
+        k8s_bootstrap_host: "{{ groups['k8s_bootstrap_control_plane'] | first }}"
+      tags:
+        - kubernetes
+        - kubernetes_access
+        - kubernetes_access_distribution
+
+- name: Verify the Kubernetes cluster
+  hosts: k8s_bootstrap_control_plane
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Check the Kubernetes cluster
+      ansible.builtin.import_role:
+        name: kubernetes
+        tasks_from: check
+      vars:
+        k8s_control_plane_hosts: "{{ groups['k8s_control_plane'] }}"
+        k8s_worker_hosts: "{{ groups['k8s_workers'] }}"
+        k8s_bootstrap_host: "{{ groups['k8s_bootstrap_control_plane'] | first }}"
+      tags:
+        - kubernetes
+        - kubernetes_verification

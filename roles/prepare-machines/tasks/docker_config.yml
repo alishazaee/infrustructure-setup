@@ -1,0 +1,19 @@
+---
+- name: Check for existing Docker configuration
+  ansible.builtin.stat:
+    path: /etc/docker/daemon.json
+  register: machine_docker_config_file
+
+- name: Read existing Docker configuration
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: machine_docker_config_content
+  when: machine_docker_config_file.stat.exists
+  no_log: true
+
+- name: Preserve Docker options managed outside this role
+  ansible.builtin.set_fact:
+    machine_existing_docker_config: >-
+      {{ (machine_docker_config_content.content | b64decode | from_json)
+         if machine_docker_config_file.stat.exists else {} }}
+  no_log: true

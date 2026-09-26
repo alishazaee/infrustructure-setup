@@ -1,0 +1,7 @@
+# Nexus is also the fallback; a failed mirror must not bypass the cache.
+server = "http://{{ registry_mirror.nexus_registry }}"
+
+[host."http://{{ registry_mirror.nexus_registry }}"]
+  capabilities = ["pull", "resolve"]
+  [host."http://{{ registry_mirror.nexus_registry }}".header]
+    authorization = "Basic {{ (k8s_registry_username ~ ':' ~ k8s_registry_password) | b64encode }}"

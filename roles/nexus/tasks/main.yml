@@ -1,0 +1,100 @@
+---
+- name: Create the Nexus data volume
+  become: true
+  community.docker.docker_volume:
+    name: "{{ nexus_data_volume }}"
+    state: present
+
+- name: Run Nexus
+  become: true
+  community.docker.docker_container:
+    name: "{{ nexus_container_name }}"
+    image: "{{ nexus_image }}"
+    pull: missing
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host
+    env:
+      NEXUS_SECURITY_RANDOMPASSWORD: "false"
+      NEXUS_SECURITY_INITIAL_PASSWORD: "{{ nexus_admin_password }}"
+    volumes:
+      - "{{ nexus_data_volume }}:/nexus-data"
+  register: nexus_container_result
+  until: nexus_container_result is succeeded
+  retries: 6
+  delay: 5
+  no_log: true
+
+- name: Wait for Nexus and verify administrator access
+  ansible.builtin.uri:
+    url: "{{ nexus_api_url }}/security/users?userId={{ nexus_admin_username }}"
+    user: "{{ nexus_admin_username }}"
+    password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: nexus_status
+  until: nexus_status.status == 200
+  retries: "{{ (nexus_startup_timeout / 60) | round(0, 'ceil') | int }}"
+  delay: 60
+  no_log: true
+
+- name: Apply Nexus repository settings
+  ansible.builtin.import_tasks: configure.yml
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nexus_admin_username }}"
+      password: "{{ nexus_admin_password }}"
+      force_basic_auth: true
+  no_log: true
+
+- name: Log Docker in to the Nexus registry group
+  become: true
+  community.docker.docker_login:
+    registry_url: "{{ nexus_hostname }}:{{ nexus_docker_group_repository.connector_port }}"
+    username: "{{ nexus_admin_username }}"
+    password: "{{ nexus_admin_password }}"
+  register: nexus_login
+  until: nexus_login is succeeded
+  retries: 30
+  delay: 2
+  no_log: true
+
+- name: Test every upstream through the Nexus Docker group
+  become: true
+  community.docker.docker_image:
+    name: "{{ nexus_hostname }}:{{ nexus_docker_group_repository.connector_port }}/{{ nexus_repository.test_image }}"
+    source: pull
+  loop: "{{ nexus_docker_proxy_repositories }}"
+  loop_control:
+    loop_var: nexus_repository
+    label: "{{ nexus_repository.name }}"
+
+- name: Test every upstream through the Nexus Raw group
+  ansible.builtin.uri:
+    url: "{{ nexus_url }}/repository/{{ nexus_raw_group_repository.name }}/{{ nexus_repository.test_path }}"
+    user: "{{ nexus_admin_username }}"
+    password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: false
+  loop: "{{ nexus_raw_proxy_repositories }}"
+  loop_control:
+    loop_var: nexus_repository
+    label: "{{ nexus_repository.name }}"
+  changed_when: false
+  no_log: true
+
+- name: Test every Nexus APT proxy
+  ansible.builtin.uri:
+    url: "{{ nexus_url }}/repository/{{ nexus_repository.name }}/{{ nexus_repository.test_path }}"
+    user: "{{ nexus_admin_username }}"
+    password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: false
+  loop: "{{ nexus_apt_proxy_repositories }}"
+  loop_control:
+    loop_var: nexus_repository
+    label: "{{ nexus_repository.name }}"
+  changed_when: false
+  no_log: true

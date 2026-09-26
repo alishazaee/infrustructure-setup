@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "{{ k8s_check_namespace }}"
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: network-check
+  namespace: "{{ k8s_check_namespace }}"
+spec:
+  selector:
+    matchLabels:
+      app: network-check
+  template:
+    metadata:
+      labels:
+        app: network-check
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        node-role.kubernetes.io/worker: ""
+      containers:
+        - name: http
+          image: "{{ k8s_check_image }}"
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec, 'echo healthy > /tmp/index.html; exec httpd -f -p 8080 -h /tmp']
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: temporary-files
+              mountPath: /tmp
+      volumes:
+        - name: temporary-files
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: network-check
+  namespace: "{{ k8s_check_namespace }}"
+spec:
+  selector:
+    app: network-check
+  ports:
+    - port: 8080
+      targetPort: 8080
