@@ -96,13 +96,32 @@
   no_log: true
   notify: Restart proxy
 
-- name: Check whether the SSH proxy host key is pinned
+- name: Create the SSH proxy known-hosts file
   become: true
-  ansible.builtin.stat:
+  ansible.builtin.file:
     path: "{{ proxy_known_hosts_file }}"
-  register: proxy_known_hosts
+    state: touch
+    access_time: preserve
+    modification_time: preserve
+    owner: root
+    group: root
+    mode: "0600"
 
-- name: Read the SSH proxy host key on first setup
+- name: Check whether the current SSH proxy host is pinned
+  become: true
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -F
+      - "{{ proxy_known_hosts_name }}"
+      - -f
+      - "{{ proxy_known_hosts_file }}"
+  register: proxy_known_host
+  changed_when: false
+  failed_when: proxy_known_host.rc not in [0, 1]
+  no_log: true
+
+- name: Read the current SSH proxy host key on first use
   ansible.builtin.command:
     argv:
       - ssh-keyscan
@@ -115,19 +134,42 @@
       - "{{ proxy_ssh_host }}"
   register: proxy_host_key
   changed_when: false
-  when: not proxy_known_hosts.stat.exists
+  failed_when: proxy_host_key.rc != 0 or proxy_host_key.stdout | length == 0
+  when: proxy_known_host.rc == 1
   no_log: true
 
 - name: Pin the SSH proxy host key
   become: true
-  ansible.builtin.copy:
-    content: "{{ proxy_host_key.stdout }}\n"
-    dest: "{{ proxy_known_hosts_file }}"
-    owner: root
-    group: root
-    mode: "0600"
+  ansible.builtin.known_hosts:
+    path: "{{ proxy_known_hosts_file }}"
+    name: "{{ proxy_known_hosts_name }}"
+    key: "{{ proxy_host_key.stdout }}"
+    state: present
   notify: Restart proxy
-  when: not proxy_known_hosts.stat.exists
+  when: proxy_known_host.rc == 1
+  no_log: true
+
+- name: Verify SSH access with the pinned host key
+  become: true
+  ansible.builtin.command:
+    argv:
+      - sshpass
+      - -f
+      - "{{ proxy_password_file }}"
+      - ssh
+      - -F
+      - /dev/null
+      - -p
+      - "{{ proxy_ssh_port | string }}"
+      - -o
+      - "UserKnownHostsFile={{ proxy_known_hosts_file }}"
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - ConnectTimeout=10
+      - "{{ proxy_ssh_user }}@{{ proxy_ssh_host }}"
+      - "true"
+  changed_when: false
   no_log: true
 
 - name: Install the transparent proxy service

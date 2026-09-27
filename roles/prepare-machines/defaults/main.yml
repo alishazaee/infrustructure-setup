@@ -6,8 +6,13 @@ machine_packages:
   - iotop
   - nmon
   - bmon
+  - fzf
+  - kubectx
   - docker.io
   - python3-docker
+
+kns_command_path: /usr/local/bin/kns
+kns_implementation_path: /usr/bin/kubens
 
 nexus_hostname: nexus
 nexus_docker_group_port: 5000

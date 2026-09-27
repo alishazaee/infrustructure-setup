@@ -107,12 +107,33 @@
       loop_control:
         label: "{{ item.item }}"
 
-    - name: Wait for CoreDNS and network components
-      ansible.builtin.command: "kubectl rollout status {{ item }} --timeout={{ k8s_check_timeout }}s"
+    - name: Wait for CoreDNS availability
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --namespace=kube-system
+          - wait
+          - --for=condition=Available
+          - "--timeout={{ k8s_check_timeout }}s"
+          - deployment/coredns
+      changed_when: false
+
+    - name: Wait for network DaemonSet rollouts
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - rollout
+          - status
+          - "{{ item.resource }}"
+          - "--namespace={{ item.namespace }}"
+          - "--timeout={{ k8s_check_timeout }}s"
       loop:
-        - deployment/coredns -n kube-system
-        - daemonset/kube-proxy -n kube-system
-        - daemonset/kube-flannel-ds -n kube-flannel
+        - resource: daemonset/kube-proxy
+          namespace: kube-system
+        - resource: daemonset/kube-flannel-ds
+          namespace: kube-flannel
+      loop_control:
+        label: "{{ item.resource }}"
       changed_when: false
 
     - name: Create an isolated smoke-test workspace

@@ -32,6 +32,15 @@
     update_cache: true
     cache_valid_time: 3600
 
+- name: Install the kns namespace-switching command
+  become: true
+  ansible.builtin.file:
+    src: "{{ kns_implementation_path }}"
+    dest: "{{ kns_command_path }}"
+    state: link
+    owner: root
+    group: root
+
 - name: Read Docker configuration before updating connector access
   ansible.builtin.import_tasks: docker_config.yml
 
